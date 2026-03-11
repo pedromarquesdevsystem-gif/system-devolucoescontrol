@@ -1,0 +1,311 @@
+{
+  "rules": {
+    ".read": true,
+    ".write": true,
+
+    "meta": {
+      ".indexOn": ["seedVersion", "seededAt", "lastSyncAt"],
+      ".validate": "newData.isObject() || !newData.exists()",
+
+      "seedVersion": {
+        ".validate": "newData.isNumber() || !newData.exists()"
+      },
+      "seededAt": {
+        ".validate": "newData.isString() || !newData.exists()"
+      },
+      "lastSyncAt": {
+        ".validate": "newData.isString() || newData.val() == now || !newData.exists()"
+      },
+      "$other": {
+        ".validate": true
+      }
+    },
+
+    "users": {
+      ".indexOn": ["login", "perfil", "ativo"],
+
+      "$userId": {
+        ".validate": "newData.hasChildren(['id', 'nome', 'login', 'senha', 'perfil', 'ativo'])",
+
+        "id": {
+          ".validate": "newData.isString() && newData.val() === $userId"
+        },
+        "nome": {
+          ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 120"
+        },
+        "login": {
+          ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 60"
+        },
+        "senha": {
+          ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 120"
+        },
+        "perfil": {
+          ".validate": "newData.isString() && (newData.val() === 'loja' || newData.val() === 'compras' || newData.val() === 'admin' || newData.val() === 'observador')"
+        },
+        "filialId": {
+          ".validate": "newData.isString() || !newData.exists()"
+        },
+        "grupoId": {
+          ".validate": "newData.isString() || !newData.exists()"
+        },
+        "ativo": {
+          ".validate": "newData.isBoolean()"
+        },
+        "criadoEm": {
+          ".validate": "newData.isString() || !newData.exists()"
+        },
+        "atualizadoEm": {
+          ".validate": "newData.isString() || !newData.exists()"
+        },
+        "$other": {
+          ".validate": false
+        }
+      }
+    },
+
+    "filiais": {
+      ".indexOn": ["numero", "nome", "ativo"],
+
+      "$filialId": {
+        ".validate": "newData.hasChildren(['id', 'numero', 'nome', 'ativo'])",
+
+        "id": {
+          ".validate": "newData.isString() && newData.val() === $filialId"
+        },
+        "numero": {
+          ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 20"
+        },
+        "nome": {
+          ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 120"
+        },
+        "ativo": {
+          ".validate": "newData.isBoolean()"
+        },
+        "criadoEm": {
+          ".validate": "newData.isString() || !newData.exists()"
+        },
+        "atualizadoEm": {
+          ".validate": "newData.isString() || !newData.exists()"
+        },
+        "$other": {
+          ".validate": false
+        }
+      }
+    },
+
+    "grupos": {
+      ".indexOn": ["nome", "ativo"],
+
+      "$grupoId": {
+        ".validate": "newData.hasChildren(['id', 'nome', 'filialIds', 'ativo'])",
+
+        "id": {
+          ".validate": "newData.isString() && newData.val() === $grupoId"
+        },
+        "nome": {
+          ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 120"
+        },
+        "filialIds": {
+          ".validate": "newData.isList() || newData.isObject()"
+        },
+        "ativo": {
+          ".validate": "newData.isBoolean()"
+        },
+        "criadoEm": {
+          ".validate": "newData.isString() || !newData.exists()"
+        },
+        "atualizadoEm": {
+          ".validate": "newData.isString() || !newData.exists()"
+        },
+
+        "$other": {
+          ".validate": false
+        }
+      }
+    },
+
+    "devolucoes": {
+      ".indexOn": ["filialId", "grupoId", "fase", "numeroNF", "fornecedor", "ativo", "excluida", "dataEmissao", "criadoEm"],
+
+      "$devolucaoId": {
+        ".validate": "newData.hasChildren(['id', 'identificacao', 'filialId', 'grupoId', 'fornecedor', 'dataEmissao', 'numeroNF', 'motivo', 'fase', 'ativo', 'excluida'])",
+
+        "id": {
+          ".validate": "newData.isString() && newData.val() === $devolucaoId"
+        },
+        "identificacao": {
+          ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 60"
+        },
+        "filialId": {
+          ".validate": "newData.isString() && newData.val().length > 0"
+        },
+        "grupoId": {
+          ".validate": "newData.isString()"
+        },
+        "filialNumero": {
+          ".validate": "newData.isString() || !newData.exists()"
+        },
+        "fornecedor": {
+          ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 180"
+        },
+        "dataEmissao": {
+          ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 20"
+        },
+        "numeroNF": {
+          ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 60"
+        },
+        "motivo": {
+          ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 500"
+        },
+        "produtos": {
+          ".validate": "newData.isString() || !newData.exists()"
+        },
+        "observacoes": {
+          ".validate": "newData.isString() || !newData.exists()"
+        },
+        "fase": {
+          ".validate": "newData.isString() && (newData.val() === 'registrada' || newData.val() === 'protocolada' || newData.val() === 'finalizada' || newData.val() === 'recusada')"
+        },
+        "faseAnterior": {
+          ".validate": "newData.isString() || !newData.exists()"
+        },
+        "protocoloFornecedor": {
+          ".validate": "newData.isString() || !newData.exists()"
+        },
+        "justificativaRecusa": {
+          ".validate": "newData.isString() || !newData.exists()"
+        },
+        "ativo": {
+          ".validate": "newData.isBoolean()"
+        },
+        "excluida": {
+          ".validate": "newData.isBoolean()"
+        },
+
+        "criadoPor": {
+          ".validate": "newData.isObject() || !newData.exists()",
+          "userId": {
+            ".validate": "newData.isString() || !newData.exists()"
+          },
+          "nome": {
+            ".validate": "newData.isString() || !newData.exists()"
+          },
+          "perfil": {
+            ".validate": "newData.isString() || !newData.exists()"
+          },
+          "$other": {
+            ".validate": false
+          }
+        },
+
+        "criadoEm": {
+          ".validate": "newData.isString() || !newData.exists()"
+        },
+        "atualizadoEm": {
+          ".validate": "newData.isString() || newData.val() == now || !newData.exists()"
+        },
+
+        "protocoladoPor": {
+          ".validate": "newData.isObject() || !newData.exists()",
+          "userId": {
+            ".validate": "newData.isString() || !newData.exists()"
+          },
+          "nome": {
+            ".validate": "newData.isString() || !newData.exists()"
+          },
+          "perfil": {
+            ".validate": "newData.isString() || !newData.exists()"
+          },
+          "$other": {
+            ".validate": false
+          }
+        },
+        "protocoladoEm": {
+          ".validate": "newData.isString() || !newData.exists()"
+        },
+
+        "finalizadoPor": {
+          ".validate": "newData.isObject() || !newData.exists()",
+          "userId": {
+            ".validate": "newData.isString() || !newData.exists()"
+          },
+          "nome": {
+            ".validate": "newData.isString() || !newData.exists()"
+          },
+          "perfil": {
+            ".validate": "newData.isString() || !newData.exists()"
+          },
+          "$other": {
+            ".validate": false
+          }
+        },
+        "finalizadoEm": {
+          ".validate": "newData.isString() || !newData.exists()"
+        },
+
+        "timeline": {
+          ".validate": "newData.isObject() || !newData.exists()",
+
+          "$timelineId": {
+            ".validate": "newData.hasChildren(['id', 'tipo', 'label', 'dataHora'])",
+
+            "id": {
+              ".validate": "newData.isString()"
+            },
+            "tipo": {
+              ".validate": "newData.isString() && newData.val().length > 0"
+            },
+            "label": {
+              ".validate": "newData.isString() && newData.val().length > 0"
+            },
+            "dataHora": {
+              ".validate": "newData.isString() || newData.val() == now"
+            },
+            "usuarioId": {
+              ".validate": "newData.isString() || !newData.exists()"
+            },
+            "usuarioNome": {
+              ".validate": "newData.isString() || !newData.exists()"
+            },
+            "usuarioPerfil": {
+              ".validate": "newData.isString() || !newData.exists()"
+            },
+            "detalhes": {
+              ".validate": "newData.isString() || !newData.exists()"
+            },
+            "observacoes": {
+              ".validate": "newData.isString() || !newData.exists()"
+            },
+            "justificativa": {
+              ".validate": "newData.isString() || !newData.exists()"
+            },
+            "before": {
+              ".validate": "newData.isObject() || !newData.exists()"
+            },
+            "after": {
+              ".validate": "newData.isObject() || !newData.exists()"
+            },
+            "$other": {
+              ".validate": false
+            }
+          }
+        },
+
+        "$other": {
+          ".validate": false
+        }
+      }
+    },
+
+    "audit": {
+      ".indexOn": ["tipo", "dataHora"],
+
+      "$auditId": {
+        ".validate": "newData.isObject() || !newData.exists()",
+        "$other": {
+          ".validate": true
+        }
+      }
+    }
+  }
+}
