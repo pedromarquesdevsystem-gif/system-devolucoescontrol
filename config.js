@@ -33,13 +33,13 @@ export const AppConfig = {
     // Substitua pelos dados reais do seu projeto Firebase.
     // O databaseURL abaixo já foi definido conforme o link que você informou.
     config: {
-      apiKey: 'COLE_AQUI_SUA_API_KEY',
-      authDomain: 'COLE_AQUI_SEU_AUTH_DOMAIN',
+      apiKey: 'AIzaSyBkciQgXni0dcAu9-8g5G1FdwNMHiqsSAc',
+      authDomain: 'system-devolucoescontrol.firebaseapp.com',
       databaseURL: 'https://system-devolucoescontrol-default-rtdb.europe-west1.firebasedatabase.app',
-      projectId: 'COLE_AQUI_SEU_PROJECT_ID',
-      storageBucket: 'COLE_AQUI_SEU_STORAGE_BUCKET',
-      messagingSenderId: 'COLE_AQUI_SEU_MESSAGING_SENDER_ID',
-      appId: 'COLE_AQUI_SEU_APP_ID',
+      projectId: 'system-devolucoescontrol',
+      storageBucket: 'system-devolucoescontrol.firebasestorage.app',
+      messagingSenderId: '39330438052',
+      appId: '1:39330438052:web:081d236c3693959a547f31',
     },
   },
 
