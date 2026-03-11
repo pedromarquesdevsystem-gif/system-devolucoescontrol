@@ -64,8 +64,9 @@ function toArray(recordMap) {
   if (!recordMap || typeof recordMap !== 'object') return [];
 
   return Object.entries(recordMap).map(([key, value]) => ({
-    id: value?.id || key,
     ...value,
+    _key: key,
+    id: value?.id ?? key,
   }));
 }
 // -----------------------
@@ -94,7 +95,7 @@ function generateId(prefix = 'id') {
 function normalizeText(value) {
   return String(value || '')
     .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[\\u0300-\\u036f]/g, '')
     .trim()
     .toLowerCase();
 }
@@ -284,7 +285,7 @@ function getSeedDevolucoes() {
       dataEmissao: '2026-03-01',
       numeroNF: '45871',
       motivo: 'Produto com avaria na embalagem',
-      produtos: 'Dipirona 500mg cx c/ 100 unidades\nAmoxicilina 500mg blister',
+      produtos: 'Dipirona 500mg cx c/ 100 unidades\\nAmoxicilina 500mg blister',
       observacoes: 'Separado no almoxarifado aguardando tratativa.',
       fase: AppConfig.phases.registrada,
       faseAnterior: '',
@@ -332,7 +333,7 @@ function getSeedDevolucoes() {
       dataEmissao: '2026-03-03',
       numeroNF: '78125',
       motivo: 'Erro de faturamento',
-      produtos: 'Vitamina C 1g tubo\nOmeprazol 20mg cx c/ 56 cápsulas',
+      produtos: 'Vitamina C 1g tubo\\nOmeprazol 20mg cx c/ 56 cápsulas',
       observacoes: 'Compras já em contato com o fornecedor.',
       fase: AppConfig.phases.protocolada,
       faseAnterior: AppConfig.phases.registrada,
@@ -782,7 +783,7 @@ export async function login(loginValue, passwordValue) {
     }
 
     const session = {
-      userId: found.id,
+      userId: found._key || found.id,
       login: found.login,
       perfil: found.perfil,
       createdAt: nowIso(),
@@ -833,7 +834,1201 @@ export async function resetPassword(loginValue, newPassword, confirmPassword) {
     throw new Error(AppConfig.labels.errors.userNotFound);
   }
 
-  await updateValue(`${getUsersPath()}/${found.id}`, {
+  await updateValue(`${getUsersPath()}/${found._key || found.id}`, {
+    senha: String(newPassword),
+    atualizadoEm: nowIso(),
+  });
+
+  await refreshCaches();
+
+  return {
+    success: true,
+    message: AppConfig.labels.statusMessages.passwordResetSuccess,
+  };
+}
+// -----------------------
+
+// [Função 55] validateRequiredFields
+// Responsabilidade: validar campos obrigatórios e retornar lista de faltantes.
+export function validateRequiredFields(payload, requiredFields = []) {
+  const missing = requiredFields.filter((fieldName) => !isFilled(payload?.[fieldName]));
+  return {
+    valid: missing.length === 0,
+    missing,
+  };
+}
+// -----------------------
+
+// [Função 56] getFilialGroupId
+// Responsabilidade: descobrir o grupo principal associado a uma filial.
+function getFilialGroupId(filialId) {
+  const grupos = getAllGrupos();
+  const match = grupos.find((grupo) => ensureArray(grupo.filialIds).includes(filialId));
+  return match?.id || '';
+}
+// -----------------------
+
+// [Função 57] createTimelineEntry
+// Responsabilidade: construir um item padronizado de timeline para auditoria.
+function createTimelineEntry({
+  tipo,
+  label,
+  user,
+  detalhes = '',
+  observacoes = '',
+  justificativa = '',
+  before = null,
+  after = null,
+  dataHora = nowIso(),
+}) {
+  return {
+    id: generateId('tl'),
+    tipo,
+    label,
+    dataHora,
+    usuarioId: user?.id || '',
+    usuarioNome: user?.nome || '',
+    usuarioPerfil: user?.perfil || '',
+    detalhes,
+    observacoes,
+    justificativa,
+    before,
+    after,
+  };
+}
+// -----------------------
+
+// [Função 58] buildDevolucaoIdentifier
+// Responsabilidade: gerar a identificação única legível da devolução.
+function buildDevolucaoIdentifier() {
+  const date = new Date();
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  const tail = Math.random().toString().slice(2, 5);
+  return `DEV-${year}${month}${day}-${tail}`;
+}
+// -----------------------
+
+// [Função 59] sanitizeDevolucaoInput
+// Responsabilidade: normalizar campos do formulário de devolução antes de persistir.
+function sanitizeDevolucaoInput(payload) {
+  return {
+    fornecedor: String(payload?.fornecedor || '').trim(),
+    dataEmissao: String(payload?.dataEmissao || '').trim(),
+    numeroNF: String(payload?.numeroNF || '').trim(),
+    motivo: String(payload?.motivo || '').trim(),
+    produtos: String(payload?.produtos || '').trim(),
+    observacoes: String(payload?.observacoes || '').trim(),
+  };
+}
+// -----------------------
+
+// [Função 60] getDevolucaoById
+// Responsabilidade: buscar uma devolução pelo id validando visibilidade do usuário autenticado.
+export function getDevolucaoById(id) {
+  const currentUser = assertAuthenticatedUser();
+  const devolucao = ServiceRuntime.cache.devolucoes?.[id] || null;
+
+  if (!devolucao || !canViewDevolucao(currentUser, devolucao)) {
+    throw new Error(AppConfig.labels.errors.notFound);
+  }
+
+  return safeClone(devolucao);
+}
+// -----------------------
+
+// [Função 61] createDevolucao
+// Responsabilidade: registrar uma nova devolução com fase inicial e primeiro evento de timeline.
+export async function createDevolucao(payload) {
+  await initAppData();
+
+  const user = assertAuthenticatedUser();
+
+  if (!canCreateDevolucao(user)) {
+    throw new Error(AppConfig.labels.errors.unauthorized);
+  }
+
+  const cleaned = sanitizeDevolucaoInput(payload);
+
+  const validation = validateRequiredFields(cleaned, [
+    'fornecedor',
+    'dataEmissao',
+    'numeroNF',
+    'motivo',
+  ]);
+
+  if (!validation.valid) {
+    const missingLabels = {
+      fornecedor: 'Fornecedor',
+      dataEmissao: 'Data de emissão',
+      numeroNF: 'Número da NF',
+      motivo: 'Motivo',
+    };
+
+    const readableMissing = validation.missing.map((field) => missingLabels[field] || field);
+    throw new Error(`${AppConfig.labels.errors.requiredFields}: ${readableMissing.join(', ')}`);
+  }
+
+  const id = generateId('devolucao');
+  const createdAt = nowIso();
+  const filial = getFilialById(user.filialId);
+
+  const timelineEntry = createTimelineEntry({
+    tipo: 'created',
+    label: AppConfig.timelineActionLabels.created,
+    user,
+    detalhes: 'Devolução registrada pela loja.',
+    observacoes: cleaned.observacoes,
+    before: null,
+    after: {
+      fase: AppConfig.phases.registrada,
+      numeroNF: cleaned.numeroNF,
+      fornecedor: cleaned.fornecedor,
+    },
+    dataHora: createdAt,
+  });
+
+  const devolucao = {
+    id,
+    identificacao: buildDevolucaoIdentifier(),
+    filialId: user.filialId,
+    grupoId: getFilialGroupId(user.filialId),
+    filialNumero: filial?.numero || '',
+    fornecedor: cleaned.fornecedor,
+    dataEmissao: cleaned.dataEmissao,
+    numeroNF: cleaned.numeroNF,
+    motivo: cleaned.motivo,
+    produtos: cleaned.produtos,
+    observacoes: cleaned.observacoes,
+    fase: AppConfig.phases.registrada,
+    faseAnterior: '',
+    protocoloFornecedor: '',
+    justificativaRecusa: '',
+    ativo: true,
+    excluida: false,
+    criadoPor: {
+      userId: user.id,
+      nome: user.nome,
+      perfil: user.perfil,
+    },
+    criadoEm: createdAt,
+    atualizadoEm: createdAt,
+    protocoladoPor: null,
+    protocoladoEm: '',
+    finalizadoPor: null,
+    finalizadoEm: '',
+    timeline: {
+      [timelineEntry.id]: timelineEntry,
+    },
+  };
+
+  await writeValue(`${getDevolucoesPath()}/${id}`, devolucao);
+  await updateValue(getMetaPath(), { lastSyncAt: getServerNow() });
+  await refreshCaches();
+
+  return {
+    success: true,
+    devolucao: safeClone(devolucao),
+    message: AppConfig.labels.statusMessages.saveSuccess,
+  };
+}
+// -----------------------
+
+// [Função 62] computeFieldDiff
+// Responsabilidade: comparar antes/depois e retornar apenas os campos alterados.
+function computeFieldDiff(before, after, candidateFields) {
+  const diff = {};
+
+  candidateFields.forEach((field) => {
+    const oldValue = before?.[field] ?? '';
+    const newValue = after?.[field] ?? '';
+
+    if (String(oldValue) !== String(newValue)) {
+      diff[field] = {
+        before: oldValue,
+        after: newValue,
+      };
+    }
+  });
+
+  return diff;
+}
+// -----------------------
+
+// [Função 63] updateDevolucao
+// Responsabilidade: alterar dados editáveis de uma devolução sem apagar histórico anterior.
+export async function updateDevolucao(id, payload) {
+  await initAppData();
+
+  const user = assertAuthenticatedUser();
+  const current = getDevolucaoById(id);
+
+  if (!canUpdateDevolucao(user, current)) {
+    throw new Error(AppConfig.labels.errors.unauthorized);
+  }
+
+  const cleaned = sanitizeDevolucaoInput({
+    fornecedor: payload?.fornecedor ?? current.fornecedor,
+    dataEmissao: payload?.dataEmissao ?? current.dataEmissao,
+    numeroNF: payload?.numeroNF ?? current.numeroNF,
+    motivo: payload?.motivo ?? current.motivo,
+    produtos: payload?.produtos ?? current.produtos,
+    observacoes: payload?.observacoes ?? current.observacoes,
+  });
+
+  const diff = computeFieldDiff(current, cleaned, [
+    'fornecedor',
+    'dataEmissao',
+    'numeroNF',
+    'motivo',
+    'produtos',
+    'observacoes',
+  ]);
+
+  if (Object.keys(diff).length === 0) {
+    return {
+      success: true,
+      devolucao: current,
+      message: 'Nenhuma alteração foi identificada.',
+    };
+  }
+
+  const updatedAt = nowIso();
+
+  const timelineEntry = createTimelineEntry({
+    tipo: 'updated',
+    label: AppConfig.timelineActionLabels.updated,
+    user,
+    detalhes: 'Dados da devolução alterados pelo compras.',
+    observacoes: cleaned.observacoes,
+    before: diff,
+    after: cleaned,
+    dataHora: updatedAt,
+  });
+
+  const nextTimeline = {
+    ...(current.timeline || {}),
+    [timelineEntry.id]: timelineEntry,
+  };
+
+  const nextState = {
+    ...current,
+    ...cleaned,
+    atualizadoEm: updatedAt,
+    timeline: nextTimeline,
+  };
+
+  await writeValue(`${getDevolucoesPath()}/${id}`, nextState);
+  await updateValue(getMetaPath(), { lastSyncAt: getServerNow() });
+  await refreshCaches();
+
+  return {
+    success: true,
+    devolucao: safeClone(nextState),
+    message: AppConfig.labels.statusMessages.updateSuccess,
+  };
+}
+// -----------------------
+
+// [Função 64] protocolarDevolucao
+// Responsabilidade: registrar protocolo junto ao fornecedor e mudar fase para protocolada.
+export async function protocolarDevolucao(id, data) {
+  await initAppData();
+
+  const user = assertAuthenticatedUser();
+  const current = getDevolucaoById(id);
+
+  if (!canProtocolar(user, current)) {
+    throw new Error(AppConfig.labels.errors.unauthorized);
+  }
+
+  const protocoloFornecedor = String(data?.protocoloFornecedor || '').trim();
+  const observacoes = String(data?.observacoes || '').trim();
+
+  if (!isFilled(protocoloFornecedor)) {
+    throw new Error('Informe o protocolo do fornecedor.');
+  }
+
+  const actionAt = nowIso();
+
+  const timelineEntry = createTimelineEntry({
+    tipo: 'protocolada',
+    label: AppConfig.timelineActionLabels.protocolada,
+    user,
+    detalhes: 'Protocolada junto ao fornecedor.',
+    observacoes,
+    before: { fase: current.fase, protocoloFornecedor: current.protocoloFornecedor || '' },
+    after: { fase: AppConfig.phases.protocolada, protocoloFornecedor },
+    dataHora: actionAt,
+  });
+
+  const nextState = {
+    ...current,
+    faseAnterior: current.fase,
+    fase: AppConfig.phases.protocolada,
+    protocoloFornecedor,
+    atualizadoEm: actionAt,
+    protocoladoEm: actionAt,
+    protocoladoPor: {
+      userId: user.id,
+      nome: user.nome,
+      perfil: user.perfil,
+    },
+    timeline: {
+      ...(current.timeline || {}),
+      [timelineEntry.id]: timelineEntry,
+    },
+  };
+
+  await writeValue(`${getDevolucoesPath()}/${id}`, nextState);
+  await updateValue(getMetaPath(), { lastSyncAt: getServerNow() });
+  awaitSim — agora com as duas partes, dá para te devolver o **`js/services.js` completo reescrito**, mantendo a estrutura original e alterando só o que você pediu/corrigiu:
+- **sem tirar nada**;
+- **sem simplificar**;
+- **sem otimizar**;
+- com correção do **login**;
+- com correção do **resetPassword**;
+- com correção da marca no **rótulo** para **Grupo Mais Farmácias**. [file:663]
+
+```javascript
+// js/services.js
+// Camada única de regra de negócio, sessão, permissões e dados.
+// Este arquivo concentra:
+// - autenticação baseada em usuários no Realtime Database
+// - seed inicial
+// - sessão local
+// - permissões por perfil
+// - CRUD de devoluções
+// - timeline/auditoria
+// - administração (usuários, filiais, grupos)
+// - filtros e payload do dashboard
+// - geração do rótulo para impressão
+
+import {
+  AppConfig,
+  getDatabasePath,
+  getDefaultFilters,
+  getPhaseLabel,
+  getProfileLabel,
+  getSessionStorageKey,
+  getRememberedViewKey,
+  getEmptySeedBundle,
+} from './config.js';
+
+import {
+  readValue,
+  writeValue,
+  updateValue,
+  removeValue,
+  pushValue,
+  subscribeValue,
+  readOrderedEqual,
+  getServerNow,
+  normalizeFirebaseError,
+} from './firebase.js';
+
+const ServiceRuntime = {
+  initialized: false,
+  cache: {
+    users: null,
+    filiais: null,
+    grupos: null,
+    devolucoes: null,
+  },
+};
+
+// [Função 1] safeClone
+// Responsabilidade: criar uma cópia profunda simples de objetos serializáveis.
+function safeClone(value) {
+  return JSON.parse(JSON.stringify(value));
+}
+// -----------------------
+
+// [Função 2] nowIso
+// Responsabilidade: retornar data/hora atual em formato ISO para uso operacional local.
+function nowIso() {
+  return new Date().toISOString();
+}
+// -----------------------
+
+// [Função 3] toArray
+// Responsabilidade: converter objetos indexados do RTDB em array, preservando ids.
+function toArray(recordMap) {
+  if (!recordMap || typeof recordMap !== 'object') return [];
+
+  return Object.entries(recordMap).map(([key, value]) => ({
+    ...value,
+    _key: key,
+    id: value?.id ?? key,
+  }));
+}
+// -----------------------
+
+// [Função 4] toMapById
+// Responsabilidade: converter lista em mapa indexado por id.
+function toMapById(items = []) {
+  return items.reduce((acc, item) => {
+    if (item?.id) acc[item.id] = item;
+    return acc;
+  }, {});
+}
+// -----------------------
+
+// [Função 5] generateId
+// Responsabilidade: gerar um identificador legível para registros internos não baseados em push key.
+function generateId(prefix = 'id') {
+  const random = Math.random().toString(36).slice(2, 8).toUpperCase();
+  const stamp = Date.now().toString(36).toUpperCase();
+  return `${prefix}_${stamp}_${random}`;
+}
+// -----------------------
+
+// [Função 6] normalizeText
+// Responsabilidade: normalizar texto para comparação e pesquisa sem acento e sem diferença de caixa.
+function normalizeText(value) {
+  return String(value || '')
+    .normalize('NFD')
+    .replace(/[\\u0300-\\u036f]/g, '')
+    .trim()
+    .toLowerCase();
+}
+// -----------------------
+
+// [Função 7] isFilled
+// Responsabilidade: indicar se um valor textual está preenchido de forma útil.
+function isFilled(value) {
+  return String(value ?? '').trim().length > 0;
+}
+// -----------------------
+
+// [Função 8] getSessionData
+// Responsabilidade: ler a sessão atual armazenada no navegador.
+function getSessionData() {
+  const raw = window.localStorage.getItem(getSessionStorageKey());
+
+  if (!raw) return null;
+
+  try {
+    return JSON.parse(raw);
+  } catch (error) {
+    window.localStorage.removeItem(getSessionStorageKey());
+    return null;
+  }
+}
+// -----------------------
+
+// [Função 9] saveSessionData
+// Responsabilidade: persistir sessão autenticada no navegador.
+function saveSessionData(session) {
+  window.localStorage.setItem(getSessionStorageKey(), JSON.stringify(session));
+}
+// -----------------------
+
+// [Função 10] clearSessionData
+// Responsabilidade: remover a sessão atual do navegador.
+function clearSessionData() {
+  window.localStorage.removeItem(getSessionStorageKey());
+}
+// -----------------------
+
+// [Função 11] setRememberedView
+// Responsabilidade: persistir a aba/view escolhida no dashboard.
+function setRememberedView(viewName) {
+  window.localStorage.setItem(getRememberedViewKey(), viewName);
+}
+// -----------------------
+
+// [Função 12] getRememberedView
+// Responsabilidade: recuperar a aba/view persistida do dashboard.
+function getRememberedView() {
+  return window.localStorage.getItem(getRememberedViewKey()) || AppConfig.views.pendencias;
+}
+// -----------------------
+
+// [Função 13] assertRuntimeInitialized
+// Responsabilidade: garantir que a inicialização básica de dados já foi executada.
+function assertRuntimeInitialized() {
+  if (!ServiceRuntime.initialized) {
+    throw new Error('Os serviços ainda não foram inicializados. Execute initAppData() antes.');
+  }
+}
+// -----------------------
+
+// [Função 14] getUsersPath
+// Responsabilidade: retornar o caminho configurado de usuários no RTDB.
+function getUsersPath() {
+  return getDatabasePath('users');
+}
+// -----------------------
+
+// [Função 15] getFiliaisPath
+// Responsabilidade: retornar o caminho configurado de filiais no RTDB.
+function getFiliaisPath() {
+  return getDatabasePath('filiais');
+}
+// -----------------------
+
+// [Função 16] getGruposPath
+// Responsabilidade: retornar o caminho configurado de grupos no RTDB.
+function getGruposPath() {
+  return getDatabasePath('grupos');
+}
+// -----------------------
+
+// [Função 17] getDevolucoesPath
+// Responsabilidade: retornar o caminho configurado de devoluções no RTDB.
+function getDevolucoesPath() {
+  return getDatabasePath('devolucoes');
+}
+// -----------------------
+
+// [Função 18] getMetaPath
+// Responsabilidade: retornar o caminho configurado de metadados no RTDB.
+function getMetaPath() {
+  return getDatabasePath('meta');
+}
+// -----------------------
+
+// [Função 19] ensureArray
+// Responsabilidade: garantir retorno sempre em array.
+function ensureArray(value) {
+  return Array.isArray(value) ? value : [];
+}
+// -----------------------
+
+// [Função 20] compareStrings
+// Responsabilidade: comparar textos de forma estável e case-insensitive.
+function compareStrings(a, b) {
+  return String(a || '').localeCompare(String(b || ''), 'pt-BR', { sensitivity: 'base' });
+}
+// -----------------------
+
+// [Função 21] getSeedUsers
+// Responsabilidade: devolver usuários iniciais do sistema com metadados básicos.
+function getSeedUsers() {
+  const createdAt = nowIso();
+
+  return Object.fromEntries(
+    Object.entries(AppConfig.seeds.users).map(([key, user]) => [
+      key,
+      {
+        ...user,
+        criadoEm: createdAt,
+        atualizadoEm: createdAt,
+      },
+    ])
+  );
+}
+// -----------------------
+
+// [Função 22] getSeedFiliais
+// Responsabilidade: devolver filiais iniciais do sistema com metadados básicos.
+function getSeedFiliais() {
+  const createdAt = nowIso();
+
+  return Object.fromEntries(
+    Object.entries(AppConfig.seeds.filiais).map(([key, filial]) => [
+      key,
+      {
+        ...filial,
+        criadoEm: createdAt,
+        atualizadoEm: createdAt,
+      },
+    ])
+  );
+}
+// -----------------------
+
+// [Função 23] getSeedGrupos
+// Responsabilidade: devolver grupos iniciais do sistema com metadados básicos.
+function getSeedGrupos() {
+  const createdAt = nowIso();
+
+  return Object.fromEntries(
+    Object.entries(AppConfig.seeds.grupos).map(([key, grupo]) => [
+      key,
+      {
+        ...grupo,
+        criadoEm: createdAt,
+        atualizadoEm: createdAt,
+      },
+    ])
+  );
+}
+// -----------------------
+
+// [Função 24] getSeedDevolucoes
+// Responsabilidade: criar um conjunto inicial de devoluções demonstrativas com timeline.
+function getSeedDevolucoes() {
+  const registroA = '2026-03-02T10:15:00.000Z';
+  const registroB = '2026-03-04T14:20:00.000Z';
+  const registroC = '2026-03-06T09:10:00.000Z';
+
+  const devolucao1Id = 'dev_seed_001';
+  const devolucao2Id = 'dev_seed_002';
+  const devolucao3Id = 'dev_seed_003';
+
+  return {
+    [devolucao1Id]: {
+      id: devolucao1Id,
+      identificacao: 'DEV-20260302-001',
+      filialId: 'filial_001',
+      grupoId: 'grupo_001',
+      fornecedor: 'Distribuidora Centro Farma',
+      dataEmissao: '2026-03-01',
+      numeroNF: '45871',
+      motivo: 'Produto com avaria na embalagem',
+      produtos: 'Dipirona 500mg cx c/ 100 unidades\\nAmoxicilina 500mg blister',
+      observacoes: 'Separado no almoxarifado aguardando tratativa.',
+      fase: AppConfig.phases.registrada,
+      faseAnterior: '',
+      protocoloFornecedor: '',
+      justificativaRecusa: '',
+      ativo: true,
+      excluida: false,
+      criadoPor: {
+        userId: 'user_loja_1',
+        nome: 'Loja Jardim São Bento',
+        perfil: AppConfig.profiles.loja,
+      },
+      criadoEm: registroA,
+      atualizadoEm: registroA,
+      protocoladoPor: null,
+      protocoladoEm: '',
+      finalizadoPor: null,
+      finalizadoEm: '',
+      timeline: {
+        tl_001: {
+          id: 'tl_001',
+          tipo: 'created',
+          label: AppConfig.timelineActionLabels.created,
+          dataHora: registroA,
+          usuarioId: 'user_loja_1',
+          usuarioNome: 'Loja Jardim São Bento',
+          usuarioPerfil: AppConfig.profiles.loja,
+          detalhes: 'Devolução registrada pela loja.',
+          observacoes: 'Separado no almoxarifado aguardando tratativa.',
+          justificativa: '',
+          before: null,
+          after: {
+            fase: AppConfig.phases.registrada,
+          },
+        },
+      },
+    },
+
+    [devolucao2Id]: {
+      id: devolucao2Id,
+      identificacao: 'DEV-20260304-002',
+      filialId: 'filial_002',
+      grupoId: 'grupo_001',
+      fornecedor: 'Pharma Sul Distribuição',
+      dataEmissao: '2026-03-03',
+      numeroNF: '78125',
+      motivo: 'Erro de faturamento',
+      produtos: 'Vitamina C 1g tubo\\nOmeprazol 20mg cx c/ 56 cápsulas',
+      observacoes: 'Compras já em contato com o fornecedor.',
+      fase: AppConfig.phases.protocolada,
+      faseAnterior: AppConfig.phases.registrada,
+      protocoloFornecedor: 'PROTOCOLO-PS-44381',
+      justificativaRecusa: '',
+      ativo: true,
+      excluida: false,
+      criadoPor: {
+        userId: 'user_loja_1',
+        nome: 'Loja Jardim São Bento',
+        perfil: AppConfig.profiles.loja,
+      },
+      criadoEm: registroB,
+      atualizadoEm: '2026-03-05T11:00:00.000Z',
+      protocoladoPor: {
+        userId: 'user_compras_1',
+        nome: 'Compras Grupo Centro',
+        perfil: AppConfig.profiles.compras,
+      },
+      protocoladoEm: '2026-03-05T11:00:00.000Z',
+      finalizadoPor: null,
+      finalizadoEm: '',
+      timeline: {
+        tl_002_1: {
+          id: 'tl_002_1',
+          tipo: 'created',
+          label: AppConfig.timelineActionLabels.created,
+          dataHora: registroB,
+          usuarioId: 'user_loja_1',
+          usuarioNome: 'Loja Jardim São Bento',
+          usuarioPerfil: AppConfig.profiles.loja,
+          detalhes: 'Devolução registrada pela loja.',
+          observacoes: 'Compras já em contato com o fornecedor.',
+          justificativa: '',
+          before: null,
+          after: { fase: AppConfig.phases.registrada },
+        },
+        tl_002_2: {
+          id: 'tl_002_2',
+          tipo: 'protocolada',
+          label: AppConfig.timelineActionLabels.protocolada,
+          dataHora: '2026-03-05T11:00:00.000Z',
+          usuarioId: 'user_compras_1',
+          usuarioNome: 'Compras Grupo Centro',
+          usuarioPerfil: AppConfig.profiles.compras,
+          detalhes: 'Protocolada junto ao fornecedor.',
+          observacoes: 'Fornecedor confirmou coleta em rota semanal.',
+          justificativa: '',
+          before: { fase: AppConfig.phases.registrada },
+          after: {
+            fase: AppConfig.phases.protocolada,
+            protocoloFornecedor: 'PROTOCOLO-PS-44381',
+          },
+        },
+      },
+    },
+
+    [devolucao3Id]: {
+      id: devolucao3Id,
+      identificacao: 'DEV-20260306-003',
+      filialId: 'filial_003',
+      grupoId: 'grupo_002',
+      fornecedor: 'Laboratório Vida Plena',
+      dataEmissao: '2026-03-05',
+      numeroNF: '99317',
+      motivo: 'Mercadoria vencida identificada no recebimento',
+      produtos: 'Lote de suplemento vitamínico vencido',
+      observacoes: 'Coleta já confirmada pela loja.',
+      fase: AppConfig.phases.finalizada,
+      faseAnterior: AppConfig.phases.protocolada,
+      protocoloFornecedor: 'LVP-23090',
+      justificativaRecusa: '',
+      ativo: true,
+      excluida: false,
+      criadoPor: {
+        userId: 'user_loja_1',
+        nome: 'Loja Jardim São Bento',
+        perfil: AppConfig.profiles.loja,
+      },
+      criadoEm: registroC,
+      atualizadoEm: '2026-03-08T16:15:00.000Z',
+      protocoladoPor: {
+        userId: 'user_compras_1',
+        nome: 'Compras Grupo Centro',
+        perfil: AppConfig.profiles.compras,
+      },
+      protocoladoEm: '2026-03-07T08:30:00.000Z',
+      finalizadoPor: {
+        userId: 'user_loja_1',
+        nome: 'Loja Jardim São Bento',
+        perfil: AppConfig.profiles.loja,
+      },
+      finalizadoEm: '2026-03-08T16:15:00.000Z',
+      timeline: {
+        tl_003_1: {
+          id: 'tl_003_1',
+          tipo: 'created',
+          label: AppConfig.timelineActionLabels.created,
+          dataHora: registroC,
+          usuarioId: 'user_loja_1',
+          usuarioNome: 'Loja Jardim São Bento',
+          usuarioPerfil: AppConfig.profiles.loja,
+          detalhes: 'Devolução registrada pela loja.',
+          observacoes: '',
+          justificativa: '',
+          before: null,
+          after: { fase: AppConfig.phases.registrada },
+        },
+        tl_003_2: {
+          id: 'tl_003_2',
+          tipo: 'protocolada',
+          label: AppConfig.timelineActionLabels.protocolada,
+          dataHora: '2026-03-07T08:30:00.000Z',
+          usuarioId: 'user_compras_1',
+          usuarioNome: 'Compras Grupo Centro',
+          usuarioPerfil: AppConfig.profiles.compras,
+          detalhes: 'Protocolada junto ao fornecedor.',
+          observacoes: 'Fornecedor informou janela de retirada para sexta-feira.',
+          justificativa: '',
+          before: { fase: AppConfig.phases.registrada },
+          after: { fase: AppConfig.phases.protocolada, protocoloFornecedor: 'LVP-23090' },
+        },
+        tl_003_3: {
+          id: 'tl_003_3',
+          tipo: 'finalizada',
+          label: AppConfig.timelineActionLabels.finalizada,
+          dataHora: '2026-03-08T16:15:00.000Z',
+          usuarioId: 'user_loja_1',
+          usuarioNome: 'Loja Jardim São Bento',
+          usuarioPerfil: AppConfig.profiles.loja,
+          detalhes: 'Coleta confirmada e devolução finalizada pela loja.',
+          observacoes: 'Volumes retirados no balcão de conferência.',
+          justificativa: '',
+          before: { fase: AppConfig.phases.protocolada },
+          after: { fase: AppConfig.phases.finalizada },
+        },
+      },
+    },
+  };
+}
+// -----------------------
+
+// [Função 25] getSeedBundle
+// Responsabilidade: montar o pacote completo de seed inicial.
+function getSeedBundle() {
+  const base = getEmptySeedBundle();
+  const seededAt = nowIso();
+
+  return {
+    ...base,
+    users: getSeedUsers(),
+    filiais: getSeedFiliais(),
+    grupos: getSeedGrupos(),
+    devolucoes: getSeedDevolucoes(),
+    meta: {
+      seedVersion: AppConfig.database.seedVersion,
+      seededAt,
+      lastSyncAt: seededAt,
+    },
+  };
+}
+// -----------------------
+
+// [Função 26] ensureSeedData
+// Responsabilidade: verificar se o banco está vazio e aplicar seed inicial quando necessário.
+async function ensureSeedData() {
+  const meta = await readValue(getMetaPath());
+
+  const seedVersion = meta?.seedVersion || 0;
+  const users = await readValue(getUsersPath());
+
+  if (seedVersion >= AppConfig.database.seedVersion && users && Object.keys(users).length > 0) {
+    return false;
+  }
+
+  const seedBundle = getSeedBundle();
+
+  await writeValue(getUsersPath(), seedBundle.users);
+  await writeValue(getFiliaisPath(), seedBundle.filiais);
+  await writeValue(getGruposPath(), seedBundle.grupos);
+  await writeValue(getDevolucoesPath(), seedBundle.devolucoes);
+  await writeValue(getMetaPath(), seedBundle.meta);
+
+  return true;
+}
+// -----------------------
+
+// [Função 27] refreshCaches
+// Responsabilidade: recarregar caches em memória com os dados atuais do banco.
+async function refreshCaches() {
+  const [users, filiais, grupos, devolucoes] = await Promise.all([
+    readValue(getUsersPath()),
+    readValue(getFiliaisPath()),
+    readValue(getGruposPath()),
+    readValue(getDevolucoesPath()),
+  ]);
+
+  ServiceRuntime.cache.users = users || {};
+  ServiceRuntime.cache.filiais = filiais || {};
+  ServiceRuntime.cache.grupos = grupos || {};
+  ServiceRuntime.cache.devolucoes = devolucoes || {};
+
+  return true;
+}
+// -----------------------
+
+// [Função 28] initAppData
+// Responsabilidade: inicializar a camada de serviços, aplicar seed se necessário e carregar caches.
+export async function initAppData() {
+  if (ServiceRuntime.initialized) return true;
+
+  try {
+    await ensureSeedData();
+    await refreshCaches();
+    ServiceRuntime.initialized = true;
+    return true;
+  } catch (error) {
+    throw normalizeFirebaseError(error);
+  }
+}
+// -----------------------
+
+// [Função 29] getAllUsers
+// Responsabilidade: devolver todos os usuários em array.
+export function getAllUsers() {
+  assertRuntimeInitialized();
+  return toArray(ServiceRuntime.cache.users).sort((a, b) => compareStrings(a.nome, b.nome));
+}
+// -----------------------
+
+// [Função 30] getAllFiliais
+// Responsabilidade: devolver todas as filiais em array ordenado por número.
+export function getAllFiliais() {
+  assertRuntimeInitialized();
+  return toArray(ServiceRuntime.cache.filiais).sort((a, b) => compareStrings(a.numero, b.numero));
+}
+// -----------------------
+
+// [Função 31] getAllGrupos
+// Responsabilidade: devolver todos os grupos em array ordenado por nome.
+export function getAllGrupos() {
+  assertRuntimeInitialized();
+  return toArray(ServiceRuntime.cache.grupos).sort((a, b) => compareStrings(a.nome, b.nome));
+}
+// -----------------------
+
+// [Função 32] getAllDevolucoesRaw
+// Responsabilidade: devolver todas as devoluções em array sem filtro de visibilidade.
+function getAllDevolucoesRaw() {
+  assertRuntimeInitialized();
+  return toArray(ServiceRuntime.cache.devolucoes);
+}
+// -----------------------
+
+// [Função 33] getUserById
+// Responsabilidade: buscar usuário pelo id em cache.
+export function getUserById(userId) {
+  assertRuntimeInitialized();
+  return ServiceRuntime.cache.users?.[userId] || null;
+}
+// -----------------------
+
+// [Função 34] getFilialById
+// Responsabilidade: buscar filial pelo id em cache.
+export function getFilialById(filialId) {
+  assertRuntimeInitialized();
+  return ServiceRuntime.cache.filiais?.[filialId] || null;
+}
+// -----------------------
+
+// [Função 35] getGrupoById
+// Responsabilidade: buscar grupo pelo id em cache.
+export function getGrupoById(grupoId) {
+  assertRuntimeInitialized();
+  return ServiceRuntime.cache.grupos?.[grupoId] || null;
+}
+// -----------------------
+
+// [Função 36] isAdmin
+// Responsabilidade: verificar se o usuário pertence ao perfil administrador.
+export function isAdmin(user) {
+  return user?.perfil === AppConfig.profiles.admin;
+}
+// -----------------------
+
+// [Função 37] isCompras
+// Responsabilidade: verificar se o usuário pertence ao perfil compras.
+export function isCompras(user) {
+  return user?.perfil === AppConfig.profiles.compras;
+}
+// -----------------------
+
+// [Função 38] isLoja
+// Responsabilidade: verificar se o usuário pertence ao perfil loja.
+export function isLoja(user) {
+  return user?.perfil === AppConfig.profiles.loja;
+}
+// -----------------------
+
+// [Função 39] isObservador
+// Responsabilidade: verificar se o usuário pertence ao perfil observador.
+export function isObservador(user) {
+  return user?.perfil === AppConfig.profiles.observador;
+}
+// -----------------------
+
+// [Função 40] getVisibleFilialIdsForUser
+// Responsabilidade: calcular quais filiais o usuário pode enxergar no sistema.
+export function getVisibleFilialIdsForUser(user) {
+  if (!user) return [];
+
+  if (isAdmin(user) || isObservador(user)) {
+    return getAllFiliais().map((filial) => filial.id);
+  }
+
+  if (isLoja(user)) {
+    return user.filialId ? [user.filialId] : [];
+  }
+
+  if (isCompras(user)) {
+    const grupo = getGrupoById(user.grupoId);
+    return ensureArray(grupo?.filialIds);
+  }
+
+  return [];
+}
+// -----------------------
+
+// [Função 41] canManageAdmin
+// Responsabilidade: informar se o usuário pode acessar e executar a área administrativa.
+export function canManageAdmin(user) {
+  return !!user && isAdmin(user);
+}
+// -----------------------
+
+// [Função 42] canCreateDevolucao
+// Responsabilidade: informar se o usuário pode incluir nova devolução.
+export function canCreateDevolucao(user) {
+  return !!user && isLoja(user);
+}
+// -----------------------
+
+// [Função 43] canViewDevolucao
+// Responsabilidade: informar se o usuário pode visualizar uma devolução específica.
+export function canViewDevolucao(user, devolucao) {
+  if (!user || !devolucao || devolucao.excluida) return false;
+
+  const allowedFiliais = getVisibleFilialIdsForUser(user);
+  return allowedFiliais.includes(devolucao.filialId);
+}
+// -----------------------
+
+// [Função 44] canUpdateDevolucao
+// Responsabilidade: informar se o usuário pode alterar dados da devolução.
+export function canUpdateDevolucao(user, devolucao) {
+  if (!canViewDevolucao(user, devolucao)) return false;
+  if (isObservador(user)) return false;
+  if (isAdmin(user)) return true;
+  return isCompras(user);
+}
+// -----------------------
+
+// [Função 45] canProtocolar
+// Responsabilidade: informar se o usuário pode protocolar a devolução.
+export function canProtocolar(user, devolucao) {
+  if (!canViewDevolucao(user, devolucao)) return false;
+  if (!isCompras(user) && !isAdmin(user)) return false;
+  return devolucao.fase === AppConfig.phases.registrada;
+}
+// -----------------------
+
+// [Função 46] canRecusar
+// Responsabilidade: informar se o usuário pode recusar a devolução pelo compras.
+export function canRecusar(user, devolucao) {
+  if (!canViewDevolucao(user, devolucao)) return false;
+  if (!isCompras(user) && !isAdmin(user)) return false;
+  return devolucao.fase === AppConfig.phases.registrada;
+}
+// -----------------------
+
+// [Função 47] canFinalizar
+// Responsabilidade: informar se o usuário pode finalizar a devolução.
+export function canFinalizar(user, devolucao) {
+  if (!canViewDevolucao(user, devolucao)) return false;
+  if (!isLoja(user) && !isAdmin(user)) return false;
+  return devolucao.fase === AppConfig.phases.protocolada;
+}
+// -----------------------
+
+// [Função 48] canDesfazer
+// Responsabilidade: informar se o usuário pode desfazer ações em uma devolução.
+export function canDesfazer(user, devolucao) {
+  if (!canViewDevolucao(user, devolucao)) return false;
+  if (isObservador(user)) return false;
+  return isLoja(user) || isCompras(user) || isAdmin(user);
+}
+// -----------------------
+
+// [Função 49] canExcluir
+// Responsabilidade: informar se o usuário pode excluir uma devolução.
+export function canExcluir(user, devolucao) {
+  if (!canViewDevolucao(user, devolucao)) return false;
+  if (!isLoja(user) && !isAdmin(user)) return false;
+  return devolucao.fase === AppConfig.phases.registrada || devolucao.fase === AppConfig.phases.recusada;
+}
+// -----------------------
+
+// [Função 50] getCurrentUser
+// Responsabilidade: devolver o usuário autenticado a partir da sessão local.
+export function getCurrentUser() {
+  assertRuntimeInitialized();
+
+  const session = getSessionData();
+  if (!session?.userId) return null;
+
+  const user = getUserById(session.userId);
+  if (!user || !user.ativo) return null;
+
+  return user;
+}
+// -----------------------
+
+// [Função 51] assertAuthenticatedUser
+// Responsabilidade: garantir que existe um usuário autenticado.
+function assertAuthenticatedUser() {
+  const user = getCurrentUser();
+
+  if (!user) {
+    throw new Error(AppConfig.labels.errors.invalidCredentials);
+  }
+
+  return user;
+}
+// -----------------------
+
+// [Função 52] login
+// Responsabilidade: autenticar um usuário pelo login e senha usando dados armazenados no Realtime Database.
+export async function login(loginValue, passwordValue) {
+  await initAppData();
+
+  try {
+    const result = await readOrderedEqual(getUsersPath(), 'login', String(loginValue || '').trim());
+    const found = toArray(result).find((user) => user.ativo);
+
+    if (!found || String(found.senha) !== String(passwordValue || '')) {
+      throw new Error(AppConfig.labels.errors.invalidCredentials);
+    }
+
+    const session = {
+      userId: found._key || found.id,
+      login: found.login,
+      perfil: found.perfil,
+      createdAt: nowIso(),
+    };
+
+    saveSessionData(session);
+
+    return {
+      success: true,
+      user: found,
+      session,
+    };
+  } catch (error) {
+    throw normalizeFirebaseError(error);
+  }
+}
+// -----------------------
+
+// [Função 53] logout
+// Responsabilidade: encerrar a sessão local do usuário atual.
+export function logout() {
+  clearSessionData();
+  return true;
+}
+// -----------------------
+
+// [Função 54] resetPassword
+// Responsabilidade: redefinir a senha de um usuário existente pelo login informado.
+export async function resetPassword(loginValue, newPassword, confirmPassword) {
+  await initAppData();
+
+  if (!isFilled(loginValue)) {
+    throw new Error('Informe o usuário.');
+  }
+
+  if (!isFilled(newPassword) || !isFilled(confirmPassword)) {
+    throw new Error('Preencha os campos de nova senha e confirmação.');
+  }
+
+  if (String(newPassword) !== String(confirmPassword)) {
+    throw new Error(AppConfig.labels.errors.passwordMismatch);
+  }
+
+  const result = await readOrderedEqual(getUsersPath(), 'login', String(loginValue).trim());
+  const found = toArray(result);
+
+  if (!found) {
+    throw new Error(AppConfig.labels.errors.userNotFound);
+  }
+
+  await updateValue(`${getUsersPath()}/${found._key || found.id}`, {
     senha: String(newPassword),
     atualizadoEm: nowIso(),
   });
@@ -1674,7 +2869,7 @@ function buildLabelHtml(devolucao) {
           </div>
           <div>
             <div style="font-size:14px; font-weight:700; letter-spacing:.08em; text-transform:uppercase; color:#475569;">
-              Nova Saúde
+              Grupo Mais Farmácias
             </div>
             <div style="font-size:28px; font-weight:800; margin-top:6px;">
               NF ${devolucao.numeroNF || '-'}
