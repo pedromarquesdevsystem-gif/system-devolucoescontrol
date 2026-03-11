@@ -13,20 +13,20 @@
 
 export const AppConfig = {
   app: {
-    name: 'Nova Saúde',
+    name: 'Grupo Mais Farmácias',
     subtitle: 'Controle de Devoluções',
     loginPage: 'index.html',
     dashboardPage: 'dashboard.html',
     defaultTheme: 'dark',
     supportedThemes: ['dark', 'light'],
     currentVersion: '1.0.0',
-    companyLabel: 'Rede Nova Saúde',
-    sessionStorageKey: 'novaSaude.session',
-    themeStorageKey: 'novaSaude.theme',
-    rememberViewStorageKey: 'novaSaude.dashboard.view',
+    companyLabel: 'Grupo Mais Farmácias',
+    sessionStorageKey: 'grupoMaisFarmacias.session',
+    themeStorageKey: 'grupoMaisFarmacias.theme',
+    rememberViewStorageKey: 'grupoMaisFarmacias.dashboard.view',
     timezone: 'America/Campo_Grande',
     locale: 'pt-BR',
-    printTitle: 'Rótulo de Devolução - Nova Saúde',
+    printTitle: 'Rótulo de Devolução - Grupo Mais Farmácias',
   },
 
   firebase: {
@@ -138,10 +138,10 @@ export const AppConfig = {
   },
 
   labels: {
-    appName: 'Nova Saúde',
+    appName: 'Grupo Mais Farmácias',
     appSubtitle: 'Controle de Devoluções',
-    loginTitle: 'Acesso ao sistema',
-    loginSubtitle: 'Entre com seu usuário e senha para acompanhar devoluções da rede.',
+    loginTitle: '',
+    loginSubtitle: '',
     dashboardTitle: 'Dashboard de Devoluções',
     dashboardSubtitle: 'Acompanhamento operacional de devoluções entre lojas, compras e administração.',
 
@@ -228,7 +228,7 @@ export const AppConfig = {
   },
 
   icons: {
-    brand: 'NS',
+    brand: 'GM',
     login: '🔐',
     user: '👤',
     password: '🔑',
@@ -413,7 +413,7 @@ export const AppConfig = {
     users: {
       admin: {
         id: 'user_admin',
-        nome: 'Administrador Nova Saúde',
+        nome: 'Administrador Grupo Mais Farmácias',
         login: 'admin',
         senha: 'admin',
         perfil: 'admin',
